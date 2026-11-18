@@ -1,0 +1,33 @@
+"""The fixed states a Reel job moves through.
+
+Happy path:
+  NEW -> INGESTED -> SCOUTED -> EDITED -> QA_PASSED -> AWAITING_APPROVAL
+      -> APPROVED -> PUBLISHED -> MEASURED
+
+Side exits: QA_FAILED, RECUT_REQUESTED, REJECTED, EXPIRED_APPROVAL,
+PUBLISH_FAILED, NEEDS_HUMAN.
+"""
+from enum import StrEnum
+
+
+class State(StrEnum):
+    NEW = "NEW"
+    INGESTED = "INGESTED"
+    SCOUTED = "SCOUTED"
+    EDITED = "EDITED"
+    QA_PASSED = "QA_PASSED"
+    AWAITING_APPROVAL = "AWAITING_APPROVAL"
+    APPROVED = "APPROVED"
+    PUBLISHED = "PUBLISHED"
+    MEASURED = "MEASURED"
+    # side exits
+    QA_FAILED = "QA_FAILED"
+    RECUT_REQUESTED = "RECUT_REQUESTED"
+    REJECTED = "REJECTED"
+    EXPIRED_APPROVAL = "EXPIRED_APPROVAL"
+    PUBLISH_FAILED = "PUBLISH_FAILED"
+    NEEDS_HUMAN = "NEEDS_HUMAN"
+
+
+# States the scheduler never touches again on its own.
+TERMINAL = {State.MEASURED, State.REJECTED, State.EXPIRED_APPROVAL, State.NEEDS_HUMAN}

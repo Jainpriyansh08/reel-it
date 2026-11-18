@@ -1,0 +1,16 @@
+# Your voice and words. Edited by hand now; by Telegram commands from week 3
+# (/vocab add Kaizen, /ban add "hack").
+
+voice:
+  adjectives: [direct, warm, practical]
+  sample_captions:
+    - "Replace me with a caption you actually posted."
+    - "And another one, so Claude learns your tone."
+
+# Names, slang and brand words the transcriber tends to mishear.
+vocab: []
+
+# Words a caption must never contain (QA blocks the Reel).
+banned_words: []
+
+font: Montserrat

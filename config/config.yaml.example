@@ -1,0 +1,20 @@
+# Machine settings. Copied to ~/.config/reel/config.yaml by `reel init`.
+
+inbox: ~/ReelInbox          # drop footage here (loose files or a folder per day)
+work: ~/ReelWork            # everything the pipeline produces
+db: ~/ReelWork/reels.db
+
+# A day's footage becomes a job once no file has changed for this long,
+# so a half-finished AirDrop or iCloud sync is never picked up.
+settle_seconds: 600
+
+max_attempts: 3             # then the job goes to NEEDS_HUMAN and you get an alert
+
+transcribe:
+  model: large-v3-turbo
+  language: en
+  device: auto              # Apple Silicon runs this on CPU via CTranslate2
+  compute_type: int8
+
+proxy_height: 720
+claude_calls_per_day: 2     # hard cap, enforced from week 2
