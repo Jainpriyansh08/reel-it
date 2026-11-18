@@ -68,9 +68,10 @@ VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm"}
 
 
 def _merge(base: dict, over: dict) -> dict:
-    out = dict(base)
+    import copy
+    out = copy.deepcopy(base)
     for k, v in (over or {}).items():
-        out[k] = _merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+        out[k] = _merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else copy.deepcopy(v)
     return out
 
 
