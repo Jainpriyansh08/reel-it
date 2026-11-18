@@ -5,6 +5,8 @@
   reel status               jobs and their states
   reel events [-n 20]       recent log, newest first
   reel retry JOB_ID         put a NEEDS_HUMAN job back where it got stuck
+  reel bot [--whoami|--once] Telegram bot (launchd keeps it running)
+  reel baseline             record your last 20 Reels' metrics before going live
 """
 from __future__ import annotations
 
@@ -94,12 +96,22 @@ def main(argv=None) -> int:
     s = sub.add_parser("status"); s.add_argument("-n", type=int, default=20)
     e = sub.add_parser("events"); e.add_argument("-n", type=int, default=30)
     r = sub.add_parser("retry"); r.add_argument("job_id", type=int)
+    b = sub.add_parser("bot")
+    b.add_argument("--whoami", action="store_true", help="print chat ids that messaged the bot")
+    b.add_argument("--once", action="store_true", help="handle one batch of updates and exit")
+    sub.add_parser("baseline")
     args = p.parse_args(argv)
 
     cfg_path = args.config.expanduser()
     if args.cmd == "init":
         return cmd_init(args, cfg_path)
     cfg = Config.load(cfg_path)
+    if args.cmd == "bot":
+        from .telegram.bot import cli_main
+        return cli_main(args, cfg) or 0
+    if args.cmd == "baseline":
+        from .agents.analyst import cli_baseline
+        return cli_baseline(cfg) or 0
     return {"tick": cmd_tick, "status": cmd_status, "events": cmd_events,
             "retry": cmd_retry}[args.cmd](args, cfg)
 

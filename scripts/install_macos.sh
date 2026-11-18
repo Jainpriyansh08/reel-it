@@ -36,8 +36,24 @@ sed -e "s#__REEL__#$VENV/bin/reel#" \
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
 
+# Telegram bot: long-running, restarted by launchd if it dies.
+BOT_LABEL="com.reel.bot"
+BOT_PLIST="$HOME/Library/LaunchAgents/$BOT_LABEL.plist"
+sed -e "s#__REEL__#$VENV/bin/reel#" \
+    -e "s#__CONFIG__#$REEL_CONFIG#" \
+    -e "s#__LOGS__#$WORK/logs#" \
+    -e "s#__BREW__#$(brew --prefix)/bin#" \
+    "$REPO/scripts/com.reel.bot.plist" > "$BOT_PLIST"
+launchctl bootout "gui/$(id -u)/$BOT_LABEL" 2>/dev/null || true
+if [ -n "${REEL_TELEGRAM_TOKEN:-}" ] || [ -f "$HOME/.config/reel/telegram_token" ]; then
+  launchctl bootstrap "gui/$(id -u)" "$BOT_PLIST"
+  BOT_STATE="running"
+else
+  BOT_STATE="NOT started: put your bot token in ~/.config/reel/telegram_token (chmod 600), then re-run this script"
+fi
+
 echo
-echo "Installed. 'reel tick' now runs every 5 minutes."
+echo "Installed. 'reel tick' now runs every 5 minutes. Telegram bot: $BOT_STATE"
 echo "  Add to your shell: export REEL_CONFIG=$REEL_CONFIG; alias reel=$VENV/bin/reel"
 echo "  Drop footage in:   $(grep '^inbox:' "$REEL_CONFIG" | awk '{print $2}')"
 echo "  Check on it:       reel status    reel events    tail -f $WORK/logs/tick.err"

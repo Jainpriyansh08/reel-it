@@ -47,6 +47,35 @@ STEPS: dict[State, tuple[Step, State]] = {
 # heartbeat, token health, insights...). Must be cheap and idempotent.
 PERIODIC: list[Callable] = []
 
+# Each module exports STEPS (and optionally PERIODIC). Imported lazily so
+# agents can `from reel import scheduler` for STAY without an import cycle.
+AGENT_MODULES = [
+    "reel.agents.scout",
+    "reel.agents.editor",
+    "reel.agents.qa",
+    "reel.agents.approval",
+    "reel.agents.publisher",
+    "reel.agents.analyst",
+]
+_registry: tuple[dict, list] | None = None
+
+
+def registry() -> tuple[dict, list]:
+    """All steps and periodic hooks. A state owned by two modules is a bug."""
+    global _registry
+    if _registry is None:
+        import importlib
+        steps, periodic = dict(STEPS), list(PERIODIC)
+        for name in AGENT_MODULES:
+            mod = importlib.import_module(name)
+            for state, entry in getattr(mod, "STEPS", {}).items():
+                if state in steps:
+                    raise RuntimeError(f"{state} has two owners ({name})")
+                steps[state] = entry
+            periodic += list(getattr(mod, "PERIODIC", []))
+        _registry = (steps, periodic)
+    return _registry
+
 
 @dataclass
 class TickResult:
@@ -119,7 +148,7 @@ def discover(conn, cfg: Config, now: float | None = None) -> list[int]:
 
 
 def run_step(conn, job, cfg: Config, steps=None) -> tuple[bool, str]:
-    steps = steps or STEPS
+    steps = steps or registry()[0]
     frm = State(job["status"])
     fn, to = steps[frm]
     try:
@@ -135,8 +164,13 @@ def run_step(conn, job, cfg: Config, steps=None) -> tuple[bool, str]:
     return True, str(to)
 
 
-def tick(cfg: Config, conn=None, steps=None, now: float | None = None) -> TickResult:
-    steps = steps or STEPS
+def tick(cfg: Config, conn=None, steps=None, now: float | None = None,
+         periodic=None) -> TickResult:
+    """`steps`/`periodic` default to every agent's; tests pass their own."""
+    if steps is None:
+        steps, default_periodic = registry()
+        periodic = default_periodic if periodic is None else periodic
+    periodic = periodic or []
     res = TickResult(created=[], advanced=[], failed=[])
     with tick_lock(cfg.work) as got:
         if not got:
@@ -152,7 +186,7 @@ def tick(cfg: Config, conn=None, steps=None, now: float | None = None) -> TickRe
                     res.failed.append((job["id"], new))
                 elif new != job["status"]:
                     res.advanced.append((job["id"], job["status"], new))
-            for hook in PERIODIC:
+            for hook in periodic:
                 try:
                     hook(conn, cfg)
                 except Exception as e:  # noqa: BLE001
