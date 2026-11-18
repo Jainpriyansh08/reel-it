@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template: install_macos.sh fills in the __PLACEHOLDERS__.
+     The Telegram bot: long-polls for your taps, restarted if it ever exits. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.reel.bot</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__REEL__</string>
+    <string>bot</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>REEL_CONFIG</key><string>__CONFIG__</string>
+    <key>PATH</key><string>__BREW__:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <!-- don't hammer Telegram if it crashes on start (e.g. not configured yet) -->
+  <key>ThrottleInterval</key><integer>60</integer>
+  <key>StandardOutPath</key><string>__LOGS__/bot.out</string>
+  <key>StandardErrorPath</key><string>__LOGS__/bot.err</string>
+</dict>
+</plist>
