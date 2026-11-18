@@ -98,7 +98,7 @@ Sorted best first, ≤ `cfg.reel["candidates"]`.
 ### edit/v<N>/edit.json
 ```json
 {"version": 2, "candidate_id": "c3", "source": "/abs/a.mp4", "start": 13.1, "end": 39.8,
- "crop": {"mode": "face | center | fit_blur", "x": 420, "w": 608},
+ "crop": {"mode": "face | center | fit_blur | fit", "x": 420, "w": 608},
  "speed": 1.0, "hook_text": "...", "caption_style": {"font": "Montserrat", "size": 72},
  "word_fixes": {"kaisen": "Kaizen"}, "loudnorm": -14, "reason": "first | recut:tighter | qa_retry"}
 ```
