@@ -76,7 +76,7 @@ MIGRATIONS = [
     );
     CREATE TABLE insights (
         id          INTEGER PRIMARY KEY,
-        job_id      INTEGER NOT NULL REFERENCES jobs(id),
+        job_id      INTEGER REFERENCES jobs(id),   -- NULL for pre-pipeline baseline posts
         media_id    TEXT NOT NULL,
         checkpoint  TEXT NOT NULL,     -- 24h | 72h | 7d | baseline
         metrics     TEXT NOT NULL,     -- JSON
