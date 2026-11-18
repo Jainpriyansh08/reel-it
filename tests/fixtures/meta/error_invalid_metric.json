@@ -1,0 +1,1 @@
+{"error": {"message": "(#100) metric[7] must be one of the following values: reach, saved, views, likes, comments, shares, total_interactions. ig_reels_avg_watch_time is not supported for this media", "type": "OAuthException", "code": 100, "fbtrace_id": "AbD"}}

@@ -1,0 +1,6 @@
+{"data": [
+  {"name": "views", "period": "lifetime", "values": [{"value": 1520}], "title": "Views", "id": "18000000000000042/insights/views/lifetime"},
+  {"name": "reach", "period": "lifetime", "values": [{"value": 1210}], "title": "Accounts reached", "id": "18000000000000042/insights/reach/lifetime"},
+  {"name": "saved", "period": "lifetime", "values": [{"value": 31}], "title": "Saved", "id": "18000000000000042/insights/saved/lifetime"},
+  {"name": "shares", "period": "lifetime", "total_value": {"value": 12}, "title": "Shares", "id": "18000000000000042/insights/shares/lifetime"}
+]}
