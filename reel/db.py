@@ -40,6 +40,54 @@ MIGRATIONS = [
         detail    TEXT
     );
     """,
+    # 2: everything weeks 2-6 need. Agents own their rows; see docs/CONTRACTS.md.
+    """
+    ALTER TABLE jobs ADD COLUMN edit_version INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE jobs ADD COLUMN qa_failures INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE jobs ADD COLUMN recuts INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE jobs ADD COLUMN recut_reason TEXT;
+    ALTER TABLE jobs ADD COLUMN state_entered_at TEXT;
+    CREATE TABLE approvals (
+        id            INTEGER PRIMARY KEY,
+        job_id        INTEGER NOT NULL REFERENCES jobs(id),
+        edit_version  INTEGER NOT NULL,
+        caption_version INTEGER NOT NULL,
+        file_sha256   TEXT NOT NULL,
+        caption_sha256 TEXT NOT NULL,
+        caption       TEXT NOT NULL,
+        status        TEXT NOT NULL,   -- pending | approved | superseded | rejected | expired
+        tg_message_id INTEGER,
+        reminded_at   TEXT,
+        created_at    TEXT NOT NULL,
+        decided_at    TEXT
+    );
+    CREATE INDEX approvals_job ON approvals(job_id, status);
+    CREATE TABLE publications (
+        id            INTEGER PRIMARY KEY,
+        job_id        INTEGER NOT NULL UNIQUE REFERENCES jobs(id),
+        approval_id   INTEGER NOT NULL REFERENCES approvals(id),
+        mode          TEXT NOT NULL,   -- manual | api
+        container_id  TEXT,
+        media_id      TEXT,
+        permalink     TEXT,
+        status        TEXT NOT NULL,   -- started | uploaded | published | failed
+        published_at  TEXT,
+        updated_at    TEXT NOT NULL
+    );
+    CREATE TABLE insights (
+        id          INTEGER PRIMARY KEY,
+        job_id      INTEGER NOT NULL REFERENCES jobs(id),
+        media_id    TEXT NOT NULL,
+        checkpoint  TEXT NOT NULL,     -- 24h | 72h | 7d | baseline
+        metrics     TEXT NOT NULL,     -- JSON
+        fetched_at  TEXT NOT NULL,
+        UNIQUE(media_id, checkpoint)
+    );
+    CREATE TABLE kv (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    );
+    """,
 ]
 
 
@@ -102,9 +150,9 @@ def jobs_in(conn, statuses) -> list[sqlite3.Row]:
 def transition(conn, job_id: int, frm: State, to: State, note: str = "") -> bool:
     """Move a job from `frm` to `to`. False if it was no longer in `frm`."""
     cur = conn.execute(
-        "UPDATE jobs SET status=?, attempts=0, last_error=NULL, updated_at=?"
+        "UPDATE jobs SET status=?, attempts=0, last_error=NULL, updated_at=?, state_entered_at=?"
         " WHERE id=? AND status=?",
-        (str(to), now(), job_id, str(frm)),
+        (str(to), now(), now(), job_id, str(frm)),
     )
     if cur.rowcount == 1:
         log(conn, job_id, "transition", f"{frm} -> {to}" + (f": {note}" if note else ""))
@@ -138,3 +186,47 @@ def retry(conn, job_id: int) -> bool:
     if not job or job["status"] != State.NEEDS_HUMAN or not job["stuck_at"]:
         return False
     return transition(conn, job_id, State.NEEDS_HUMAN, State(job["stuck_at"]), "manual retry")
+
+
+def kv_get(conn, key: str, default: str | None = None) -> str | None:
+    row = conn.execute("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
+    return row[0] if row else default
+
+
+def kv_set(conn, key: str, value: str) -> None:
+    conn.execute("INSERT INTO kv(key, value) VALUES (?,?) "
+                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
+
+
+def alert(conn, job_id: int | None, message: str) -> None:
+    """Something you must see. The Telegram bot delivers unsent alerts."""
+    log(conn, job_id, "alert", message)
+
+
+def give_up(conn, job_id: int, frm: State, message: str) -> bool:
+    """Stop work on a job now: NEEDS_HUMAN (retryable from `frm`) + alert."""
+    cur = conn.execute(
+        "UPDATE jobs SET status=?, stuck_at=?, last_error=?, updated_at=?, state_entered_at=?"
+        " WHERE id=? AND status=?",
+        (State.NEEDS_HUMAN, str(frm), message, now(), now(), job_id, str(frm)),
+    )
+    if cur.rowcount == 1:
+        alert(conn, job_id, f"needs you at {frm}: {message}")
+        return True
+    return False
+
+
+def set_job(conn, job_id: int, **cols) -> None:
+    """Update non-status bookkeeping columns (edit_version, qa_failures,
+    recuts, recut_reason). Status changes must use transition()."""
+    allowed = {"edit_version", "qa_failures", "recuts", "recut_reason"}
+    bad = set(cols) - allowed
+    if bad:
+        raise ValueError(f"set_job cannot change {bad}")
+    sets = ", ".join(f"{k}=?" for k in cols)
+    conn.execute(f"UPDATE jobs SET {sets}, updated_at=? WHERE id=?", (*cols.values(), now(), job_id))
+
+
+def is_paused(conn) -> bool:
+    until = kv_get(conn, "paused_until")
+    return bool(until) and until > now()

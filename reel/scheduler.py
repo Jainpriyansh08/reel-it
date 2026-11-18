@@ -24,17 +24,28 @@ from .agents import ingest
 from .config import VIDEO_EXTS, Config
 from .states import State
 
-# state -> (step function, next state). Weeks 2+ add entries here.
-Step = Callable[[dict, Config], None]
+# state -> (step function, default next state).
+#
+# A step is fn(conn, job, cfg) and returns:
+#   None   -> move to the default next state
+#   State  -> move to that state instead (e.g. QA_FAILED)
+#   STAY   -> nothing to do yet (e.g. waiting for your tap); not a failure
+# Raising records a failed attempt; after max_attempts -> NEEDS_HUMAN.
+STAY = object()
+Step = Callable[..., object]
 
 
-def _ingest_step(job, cfg: Config, backends=None) -> None:
+def _ingest_step(conn, job, cfg: Config, backends=None) -> None:
     ingest.run(Path(job["source_dir"]), Path(job["workdir"]), cfg, backends)
 
 
 STEPS: dict[State, tuple[Step, State]] = {
     State.NEW: (_ingest_step, State.INGESTED),
 }
+
+# fn(conn, cfg), run once per tick after the steps (deadline alerts,
+# heartbeat, token health, insights...). Must be cheap and idempotent.
+PERIODIC: list[Callable] = []
 
 
 @dataclass
@@ -112,11 +123,14 @@ def run_step(conn, job, cfg: Config, steps=None) -> tuple[bool, str]:
     frm = State(job["status"])
     fn, to = steps[frm]
     try:
-        fn(job, cfg)
+        out = fn(conn, job, cfg)
     except Exception as e:  # noqa: BLE001 - every failure is recorded, none is silent
         err = f"{type(e).__name__}: {e}\n{traceback.format_exc(limit=5)}"
         new = db.record_failure(conn, job["id"], frm, err, cfg.max_attempts)
         return False, str(new)
+    if out is STAY:
+        return True, str(frm)
+    to = out if isinstance(out, State) else to
     db.transition(conn, job["id"], frm, to)
     return True, str(to)
 
@@ -131,11 +145,18 @@ def tick(cfg: Config, conn=None, steps=None, now: float | None = None) -> TickRe
         own = conn is None
         conn = conn or db.connect(cfg.db)
         try:
-            res.created = discover(conn, cfg, now)
+            res.created = [] if db.is_paused(conn) else discover(conn, cfg, now)
             for job in db.jobs_in(conn, steps.keys()):
                 ok, new = run_step(conn, job, cfg, steps)
-                (res.advanced if ok else res.failed).append(
-                    (job["id"], job["status"], new) if ok else (job["id"], new))
+                if not ok:
+                    res.failed.append((job["id"], new))
+                elif new != job["status"]:
+                    res.advanced.append((job["id"], job["status"], new))
+            for hook in PERIODIC:
+                try:
+                    hook(conn, cfg)
+                except Exception as e:  # noqa: BLE001
+                    db.alert(conn, None, f"periodic task {hook.__name__} failed: {e}")
         finally:
             if own:
                 conn.close()

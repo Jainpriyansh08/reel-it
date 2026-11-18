@@ -11,7 +11,7 @@ def touch_video(path, seconds_ago):
     return path
 
 
-def ok_step(job, cfg):
+def ok_step(conn, job, cfg):
     pass
 
 
@@ -51,7 +51,7 @@ def test_crash_mid_step_leaves_state_and_resumes(cfg, conn):
     touch_video(cfg.inbox / "d1" / "a.mp4", 120)
     calls = []
 
-    def flaky(job, cfg):
+    def flaky(conn, job, cfg):
         calls.append(1)
         if len(calls) == 1:
             raise OSError("disk hiccup")
@@ -66,7 +66,7 @@ def test_crash_mid_step_leaves_state_and_resumes(cfg, conn):
 def test_repeated_failure_goes_to_needs_human_and_stops(cfg, conn):
     touch_video(cfg.inbox / "d1" / "a.mp4", 120)
 
-    def broken(job, cfg):
+    def broken(conn, job, cfg):
         raise ValueError("unreadable footage")
 
     steps = {State.NEW: (broken, State.INGESTED)}
@@ -84,3 +84,14 @@ def test_overlapping_tick_is_locked_out(cfg, conn):
         assert got
         assert scheduler.tick(cfg, conn, STEPS_OK).locked_out
     assert not scheduler.tick(cfg, conn, STEPS_OK).locked_out
+
+
+def test_step_can_stay_or_redirect(cfg, conn):
+    touch_video(cfg.inbox / "d1" / "a.mp4", 120)
+    steps = {State.NEW: (lambda c, j, k: scheduler.STAY, State.INGESTED)}
+    r = scheduler.tick(cfg, conn, steps)
+    assert r.advanced == [] and r.failed == []
+    assert conn.execute("SELECT status FROM jobs").fetchone()[0] == State.NEW
+    steps = {State.NEW: (lambda c, j, k: State.QA_FAILED, State.INGESTED)}
+    scheduler.tick(cfg, conn, steps)
+    assert conn.execute("SELECT status FROM jobs").fetchone()[0] == State.QA_FAILED
