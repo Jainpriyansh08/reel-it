@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -231,11 +231,76 @@ def test_still_processing_stays_then_publishes(conn, cfg, tmp_path, monkeypatch)
     assert len(s.find("POST", "rupload")) == 1
 
 
-def test_transient_error_raises(conn, cfg, tmp_path):
+def test_rate_limit_backs_off_instead_of_burning_attempts(conn, cfg, tmp_path):
     job_id = make_job(conn, cfg, tmp_path)
     s = FakeSession().route("POST", f"{IG}/media", (400, "error_rate_limit"))
-    with pytest.raises(TransientGraphError):
-        run(conn, cfg, job_id, FakeTG(), GraphClient("T", IG, session=s))
+    s.route("GET", f"{IG}/media", {"data": []})
+    client = GraphClient("T", IG, session=s)
+    assert run(conn, cfg, job_id, FakeTG(), client) is scheduler.STAY
+    job = job_row(conn, job_id)
+    assert job["status"] == State.APPROVED and job["attempts"] == 0
+    calls = len(s.calls)
+    # Inside the backoff window: no API calls at all.
+    assert run(conn, cfg, job_id, FakeTG(), client, now=AFTER + timedelta(minutes=2)) is scheduler.STAY
+    assert len(s.calls) == calls
+    # After it: tries again.
+    run(conn, cfg, job_id, FakeTG(), client, now=AFTER + timedelta(minutes=6))
+    assert len(s.calls) > calls
+    assert "rate limit" in " ".join(r["message"] for r in conn.execute("SELECT message FROM events"))
+
+
+def test_backoff_clears_after_success(conn, cfg, tmp_path):
+    job_id = make_job(conn, cfg, tmp_path)
+    flaky = FakeSession().route("POST", f"{IG}/media", (400, "error_rate_limit"))
+    flaky.route("GET", f"{IG}/media", {"data": []})
+    run(conn, cfg, job_id, FakeTG(), GraphClient("T", IG, session=flaky))
+    s = happy_session()
+    tg = FakeTG()
+    assert run(conn, cfg, job_id, tg, GraphClient("T", IG, session=s),
+               now=AFTER + timedelta(minutes=6)) is None
+    assert pub(conn, job_id)["status"] == "published"
+    assert db.kv_get(conn, f"publish_backoff:{job_id}") in (None, "")
+
+
+def test_rate_limit_that_never_clears_fails_with_retry_button(conn, cfg, tmp_path):
+    job_id = make_job(conn, cfg, tmp_path)
+    s = FakeSession().route("POST", f"{IG}/media", (400, "error_rate_limit"))
+    s.route("GET", f"{IG}/media", {"data": []})
+    client = GraphClient("T", IG, session=s)
+    t, out = AFTER, None
+    for _ in range(40):
+        out = run(conn, cfg, job_id, FakeTG(), client, now=t)
+        if out == State.PUBLISH_FAILED:
+            break
+        t += timedelta(minutes=61)
+    assert out == State.PUBLISH_FAILED
+    assert t - AFTER >= timedelta(hours=6)
+    assert conn.execute("SELECT count(*) FROM events WHERE kind='alert'").fetchone()[0] == 1
+    assert db.kv_get(conn, f"publish_backoff:{job_id}") in (None, "")  # Retry starts fresh
+
+
+class FlakyTG(FakeTG):
+    def __init__(self, fail_message_times=1):
+        super().__init__()
+        self.fail = fail_message_times
+
+    def send_message(self, text, buttons=None):
+        if self.fail:
+            self.fail -= 1
+            raise RuntimeError("telegram down")
+        return super().send_message(text, buttons)
+
+
+def test_manual_partial_send_never_resends_the_video(conn, cfg, tmp_path):
+    job_id = make_job(conn, cfg, tmp_path, mode="manual")
+    tg = FlakyTG()
+    with pytest.raises(RuntimeError):
+        run(conn, cfg, job_id, tg, None)
+    assert [k for k, *_ in tg.sent] == ["video"]
+    assert run(conn, cfg, job_id, tg, None) is scheduler.STAY
+    assert [k for k, *_ in tg.sent] == ["video", "message"]   # caption only, no 2nd video
+    assert run(conn, cfg, job_id, tg, None) is scheduler.STAY
+    assert len(tg.sent) == 2
 
 
 def test_permanent_error_goes_to_publish_failed_with_alert(conn, cfg, tmp_path):

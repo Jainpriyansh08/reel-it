@@ -37,8 +37,8 @@ def step(conn, job, cfg) -> None | State | scheduler.STAY
 | RECUT_REQUESTED | editor | EDITED | |
 | QA_PASSED | approval (telegram) | AWAITING_APPROVAL | |
 | AWAITING_APPROVAL | approval | STAY | EXPIRED_APPROVAL (timeout) |
-| APPROVED | publisher | PUBLISHED (api) / STAY (manual, waiting for "Posted") | PUBLISH_FAILED |
-| PUBLISH_FAILED | publisher | APPROVED (retry w/ backoff) | give_up |
+| APPROVED | publisher | PUBLISHED (api) / STAY (manual, waiting for "Posted"; or rate-limit backoff 5→60 min) | PUBLISH_FAILED after 6 h of temporary errors, or a permanent error |
+| PUBLISH_FAILED | publisher | STAY until you tap Retry (→ APPROVED) | |
 | PUBLISHED | analyst | STAY until last checkpoint, then MEASURED | |
 
 The bot (outside the scheduler) moves AWAITING_APPROVAL → APPROVED / REJECTED

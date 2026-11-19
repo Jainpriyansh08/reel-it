@@ -10,8 +10,9 @@ with a crash-safe, idempotent sequence recorded in `publications`.
 """
 from __future__ import annotations
 
+import json
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .. import db, scheduler
@@ -156,19 +157,54 @@ def _manual(conn, job, cfg, approval, pub, final: Path, caption: str, tg):
     tg = _get_tg(cfg, tg)
     if tg is None:
         raise RuntimeError("manual publish needs Telegram, but no bot token/chat_id is configured")
-    # Row exists but sending didn't complete last time (crash/Telegram error):
-    # send again — a duplicate message is harmless, an undelivered Reel is not.
-    if final.stat().st_size < TELEGRAM_VIDEO_LIMIT:
-        tg.send_video(str(final), caption="Your Reel, approved and ready to post.")
-    else:
-        tg.send_document(str(final), caption="Your Reel, approved and ready to post.")
+    # Two sends, each recorded once it succeeds, so a failure part-way through
+    # resumes with the missing part instead of sending the video twice.
+    if not db.kv_get(conn, f"manual_video_sent:{job_id}"):
+        if final.stat().st_size < TELEGRAM_VIDEO_LIMIT:
+            tg.send_video(str(final), caption="Your Reel, approved and ready to post.")
+        else:
+            tg.send_document(str(final), caption="Your Reel, approved and ready to post.")
+        db.kv_set(conn, f"manual_video_sent:{job_id}", db.now())
     tg.send_message(caption, buttons=[[("✅ Posted", f"posted:{job_id}")]])
     db.kv_set(conn, f"manual_sent:{job_id}", db.now())
     db.log(conn, job_id, "info", "manual publish: file + caption sent, waiting for Posted")
     return scheduler.STAY
 
 
+# Rate limits and Meta outages: wait and retry inside APPROVED instead of
+# raising, which would use up max_attempts in 15 minutes. 5, 10, 20, 40, 60,
+# 60... minutes; after BACKOFF_GIVE_UP of failing, PUBLISH_FAILED (Retry button).
+BACKOFF_FIRST = timedelta(minutes=5)
+BACKOFF_MAX = timedelta(minutes=60)
+BACKOFF_GIVE_UP = timedelta(hours=6)
+
+
+def _backoff(conn, job_id: int) -> dict | None:
+    raw = db.kv_get(conn, f"publish_backoff:{job_id}")
+    return json.loads(raw) if raw else None
+
+
+def _clear_backoff(conn, job_id: int) -> None:
+    db.kv_set(conn, f"publish_backoff:{job_id}", "")
+
+
+def _transient(conn, job_id: int, err, now: datetime):
+    now_utc = now.astimezone(timezone.utc)
+    b = _backoff(conn, job_id) or {"first": now_utc.isoformat(), "n": 0}
+    b["n"] += 1
+    if now_utc - datetime.fromisoformat(b["first"]) >= BACKOFF_GIVE_UP:
+        _clear_backoff(conn, job_id)
+        return _fail(conn, job_id, f"Instagram kept failing for {BACKOFF_GIVE_UP} (last: {err})")
+    wait = min(BACKOFF_FIRST * 2 ** (b["n"] - 1), BACKOFF_MAX)
+    b["until"] = (now_utc + wait).isoformat()
+    db.kv_set(conn, f"publish_backoff:{job_id}", json.dumps(b))
+    db.log(conn, job_id, "info", f"Instagram temporary error / rate limit, retrying in "
+                                 f"{int(wait.total_seconds() // 60)} min: {err}")
+    return scheduler.STAY
+
+
 def _fail(conn, job_id: int, reason: str):
+    _clear_backoff(conn, job_id)
     _set_pub(conn, job_id, status="failed")
     db.kv_set(conn, f"publish_error:{job_id}", reason[:500])
     db.alert(conn, job_id, f"Publish failed: {reason}")
@@ -180,6 +216,9 @@ def _api(conn, job, cfg, approval, pub, final, caption, pkg, tg, graph, now, sle
 
     job_id = job["id"]
     if pub is None and not _post_time_reached(cfg, now):
+        return scheduler.STAY
+    b = _backoff(conn, job_id)
+    if b and b.get("until") and now.astimezone(timezone.utc) < datetime.fromisoformat(b["until"]):
         return scheduler.STAY
     client = _get_graph(cfg, graph)
     if client is None:
@@ -245,10 +284,11 @@ def _api(conn, job, cfg, approval, pub, final, caption, pkg, tg, graph, now, sle
 
         media_id = client.publish(container)
         _set_pub(conn, job_id, media_id=media_id)
+        _clear_backoff(conn, job_id)
         db.log(conn, job_id, "info", f"published media {media_id}")
         return _finish(conn, job_id, cfg, publication(conn, job_id), tg, client)
-    except TransientGraphError:
-        raise
+    except TransientGraphError as e:
+        return _transient(conn, job_id, e, now)
     except GraphError as e:
         return _fail(conn, job_id, str(e))
 
